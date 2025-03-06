@@ -6,12 +6,25 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from io import BytesIO
 import numpy as np
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
+import zipfile
+import shutil
+import logging
 
 app = Flask(__name__)
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configure upload folder
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 def generate_stl_preview(stl_path):
     try:
+        logger.info(f"Generating preview for: {stl_path}")
         your_mesh = mesh.Mesh.from_file(stl_path)
         fig = plt.figure(figsize=(5, 5))
         ax = fig.add_subplot(111, projection='3d')
@@ -27,18 +40,21 @@ def generate_stl_preview(stl_path):
         plt.close(fig)
         return base64.b64encode(buf.getvalue()).decode('utf-8')
     except Exception as e:
-        print(f"Preview generation failed for {stl_path}: {str(e)}")
+        logger.error(f"Preview generation failed for {stl_path}: {str(e)}")
         return None
 
 def generate_checklist_data(folder_path):
     if not os.path.exists(folder_path):
+        logger.error(f"Folder does not exist: {folder_path}")
         return {"error": f"Folder does not exist: {folder_path}"}
     
     folder_name = os.path.basename(os.path.abspath(folder_path))
     checklist_items = []
     file_count = 0
     
+    logger.info(f"Scanning folder: {folder_path}")
     for root, dirs, files in os.walk(folder_path):
+        logger.info(f"Checking directory: {root}")
         for file in files:
             if file.lower().endswith('.stl'):
                 file_count += 1
@@ -53,6 +69,10 @@ def generate_checklist_data(folder_path):
                     "path": relative_path,
                     "preview": preview_base64
                 })
+                logger.info(f"Added STL file: {stl_path}")
+    
+    if not checklist_items:
+        logger.warning("No STL files found in the uploaded folder")
     
     return {
         "folder_name": folder_name,
@@ -64,16 +84,50 @@ def generate_checklist_data(folder_path):
 def index():
     return render_template('index.html')
 
-@app.route('/generate_checklist', methods=['POST'])
-def generate_checklist():
-    folder_path = request.form.get('folder_path')
-    if not folder_path:
-        return jsonify({"error": "Please provide a folder path"}), 400
+@app.route('/upload', methods=['POST'])
+def upload_folder():
+    if 'folder' not in request.files:
+        logger.error("No folder file part in request")
+        return jsonify({"error": "No folder file part"}), 400
     
-    checklist_data = generate_checklist_data(folder_path)
-    return jsonify(checklist_data)
+    file = request.files['folder']
+    if file.filename == '':
+        logger.error("No selected file")
+        return jsonify({"error": "No selected file"}), 400
+    
+    if file and file.filename.endswith('.zip'):
+        try:
+            # Save the uploaded zip file
+            zip_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+            file.save(zip_path)
+            logger.info(f"Saved zip file to: {zip_path}")
+            
+            # Extract the zip file
+            extract_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename[:-4])
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+            logger.info(f"Extracted zip to: {extract_path}")
+            
+            # Generate checklist from extracted folder
+            checklist_data = generate_checklist_data(extract_path)
+            
+            # Clean up
+            os.remove(zip_path)
+            shutil.rmtree(extract_path, ignore_errors=True)
+            logger.info("Cleaned up temporary files")
+            
+            if "error" in checklist_data:
+                return jsonify(checklist_data), 400
+            
+            return jsonify(checklist_data)
+        except Exception as e:
+            logger.error(f"Error processing upload: {str(e)}")
+            return jsonify({"error": f"Error processing upload: {str(e)}"}), 500
+    else:
+        logger.error("Uploaded file is not a zip")
+        return jsonify({"error": "Please upload a .zip file"}), 400
 
-# HTML template will be in a separate file
+# HTML template with improved error handling
 with open('templates/index.html', 'w') as f:
     f.write('''<!DOCTYPE html>
 <html>
@@ -109,12 +163,9 @@ with open('templates/index.html', 'w') as f:
         .print-button:hover, .generate-button:hover {
             background-color: #45a049;
         }
-        #folder-input {
-            padding: 8px;
-            width: 300px;
-            margin-right: 10px;
-        }
+        #folder-input { margin-right: 10px; }
         #checklist-container { margin-top: 20px; }
+        .error-message { color: red; }
         @media print {
             .print-button, .input-container { display: none; }
         }
@@ -123,31 +174,56 @@ with open('templates/index.html', 'w') as f:
 <body>
     <h1>3D Print Checklist Generator</h1>
     <div class="input-container">
-        <input type="text" id="folder-input" placeholder="Enter folder path">
-        <button class="generate-button" onclick="generateChecklist()">Generate Checklist</button>
+        <input type="file" id="folder-input" name="folder" accept=".zip">
+        <button class="generate-button" onclick="uploadFolder()">Generate Checklist</button>
         <button class="print-button" onclick="window.print()" style="display: none;" id="print-btn">Print Checklist</button>
     </div>
     <div id="checklist-container"></div>
 
     <script>
-        function generateChecklist() {
-            const folderPath = document.getElementById('folder-input').value;
-            fetch('/generate_checklist', {
+        function uploadFolder() {
+            const fileInput = document.getElementById('folder-input');
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select a zip file');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('folder', file);
+            
+            fetch('/upload', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `folder_path=${encodeURIComponent(folderPath)}`
+                body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
+                console.log('Server response:', data); // Log the response for debugging
+                const container = document.getElementById('checklist-container');
+                container.innerHTML = '';
+                
                 if (data.error) {
-                    alert(data.error);
+                    container.innerHTML = `<p class="error-message">${data.error}</p>`;
                     return;
                 }
                 
-                const container = document.getElementById('checklist-container');
                 container.innerHTML = `<h2>Checklist: ${data.folder_name}</h2>`;
                 
+                if (!data.items || !Array.isArray(data.items)) {
+                    container.innerHTML += `<p class="error-message">No valid STL items found in the response</p>`;
+                    return;
+                }
+                
                 data.items.forEach(item => {
+                    if (!item || !item.id) {
+                        console.warn('Invalid item:', item);
+                        return;
+                    }
                     const itemHtml = `
                         <div class="stl-item">
                             <div class="checkbox-container">
@@ -172,7 +248,8 @@ with open('templates/index.html', 'w') as f:
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('An error occurred while generating the checklist');
+                const container = document.getElementById('checklist-container');
+                container.innerHTML = `<p class="error-message">An error occurred: ${error.message}</p>`;
             });
         }
     </script>
@@ -181,4 +258,4 @@ with open('templates/index.html', 'w') as f:
 ''')
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
