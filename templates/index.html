@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Print Checklist Generator</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        .stl-item { 
+            border: 1px solid #ddd; 
+            padding: 10px; 
+            margin: 10px 0; 
+            display: flex; 
+            align-items: center; 
+            page-break-inside: avoid;
+        }
+        .stl-preview { 
+            width: 150px; 
+            height: 150px; 
+            margin-right: 20px; 
+        }
+        .checkbox-container { margin-right: 20px; }
+        .file-path { font-size: 0.9em; color: #666; }
+        .print-button, .generate-button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 10px 10px 0;
+        }
+        .print-button:hover, .generate-button:hover {
+            background-color: #45a049;
+        }
+        #folder-input {
+            padding: 8px;
+            width: 300px;
+            margin-right: 10px;
+        }
+        #checklist-container { margin-top: 20px; }
+        @media print {
+            .print-button, .input-container { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <h1>3D Print Checklist Generator</h1>
+    <div class="input-container">
+        <input type="text" id="folder-input" placeholder="Enter folder path">
+        <button class="generate-button" onclick="generateChecklist()">Generate Checklist</button>
+        <button class="print-button" onclick="window.print()" style="display: none;" id="print-btn">Print Checklist</button>
+    </div>
+    <div id="checklist-container"></div>
+
+    <script>
+        function generateChecklist() {
+            const folderPath = document.getElementById('folder-input').value;
+            fetch('/generate_checklist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `folder_path=${encodeURIComponent(folderPath)}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                
+                const container = document.getElementById('checklist-container');
+                container.innerHTML = `<h2>Checklist: ${data.folder_name}</h2>`;
+                
+                data.items.forEach(item => {
+                    const itemHtml = `
+                        <div class="stl-item">
+                            <div class="checkbox-container">
+                                <input type="checkbox" id="${item.id}">
+                                <label for="${item.id}"></label>
+                            </div>
+                            ${item.preview ? 
+                                `<img class="stl-preview" src="data:image/png;base64,${item.preview}" alt="${item.filename} preview">` :
+                                `<div class="stl-preview">No preview available</div>`
+                            }
+                            <div>
+                                <div>${item.filename}</div>
+                                <div class="file-path">${item.path}</div>
+                            </div>
+                        </div>
+                    `;
+                    container.innerHTML += itemHtml;
+                });
+                
+                container.innerHTML += `<p>Total STL files found: ${data.file_count}</p>`;
+                document.getElementById('print-btn').style.display = 'inline-block';
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while generating the checklist');
+            });
+        }
+    </script>
+</body>
+</html>
