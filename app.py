@@ -46,7 +46,7 @@ def generate_stl_preview(stl_path):
 def generate_checklist_data(folder_path):
     if not os.path.exists(folder_path):
         logger.error(f"Folder does not exist: {folder_path}")
-        return {"error": f"Folder does not exist: {folder_path}"}
+        return {"error": f"Folder does not exist: {folder_path}", "items": [], "file_count": 0}
     
     folder_name = os.path.basename(os.path.abspath(folder_path))
     checklist_items = []
@@ -67,18 +67,20 @@ def generate_checklist_data(folder_path):
                     "id": item_id,
                     "filename": file,
                     "path": relative_path,
-                    "preview": preview_base64
+                    "preview": preview_base64 if preview_base64 else ""
                 })
-                logger.info(f"Added STL file: {stl_path}")
+                logger.info(f"Added STL file: {stl_path} with ID: {item_id}")
     
     if not checklist_items:
         logger.warning("No STL files found in the uploaded folder")
     
-    return {
+    response = {
         "folder_name": folder_name,
         "items": checklist_items,
         "file_count": file_count
     }
+    logger.info(f"Generated checklist data: folder_name={folder_name}, items_count={len(checklist_items)}, file_count={file_count}")
+    return response
 
 @app.route('/')
 def index():
@@ -86,14 +88,15 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_folder():
+    logger.info("Received upload request")
     if 'folder' not in request.files:
         logger.error("No folder file part in request")
-        return jsonify({"error": "No folder file part"}), 400
+        return jsonify({"error": "No folder file part", "items": [], "file_count": 0}), 400
     
     file = request.files['folder']
     if file.filename == '':
         logger.error("No selected file")
-        return jsonify({"error": "No selected file"}), 400
+        return jsonify({"error": "No selected file", "items": [], "file_count": 0}), 400
     
     if file and file.filename.endswith('.zip'):
         try:
@@ -116,18 +119,15 @@ def upload_folder():
             shutil.rmtree(extract_path, ignore_errors=True)
             logger.info("Cleaned up temporary files")
             
-            if "error" in checklist_data:
-                return jsonify(checklist_data), 400
-            
             return jsonify(checklist_data)
         except Exception as e:
             logger.error(f"Error processing upload: {str(e)}")
-            return jsonify({"error": f"Error processing upload: {str(e)}"}), 500
+            return jsonify({"error": f"Error processing upload: {str(e)}", "items": [], "file_count": 0}), 500
     else:
         logger.error("Uploaded file is not a zip")
-        return jsonify({"error": "Please upload a .zip file"}), 400
+        return jsonify({"error": "Please upload a .zip file", "items": [], "file_count": 0}), 400
 
-# HTML template with improved error handling
+# HTML template with enhanced diagnostics
 with open('templates/index.html', 'w') as f:
     f.write('''<!DOCTYPE html>
 <html>
@@ -203,25 +203,32 @@ with open('templates/index.html', 'w') as f:
                 return response.json();
             })
             .then(data => {
-                console.log('Server response:', data); // Log the response for debugging
+                console.log('Server response:', data);
                 const container = document.getElementById('checklist-container');
                 container.innerHTML = '';
+                
+                if (!data || typeof data !== 'object') {
+                    container.innerHTML = '<p class="error-message">Invalid server response</p>';
+                    console.error('Invalid data format:', data);
+                    return;
+                }
                 
                 if (data.error) {
                     container.innerHTML = `<p class="error-message">${data.error}</p>`;
                     return;
                 }
                 
-                container.innerHTML = `<h2>Checklist: ${data.folder_name}</h2>`;
-                
                 if (!data.items || !Array.isArray(data.items)) {
-                    container.innerHTML += `<p class="error-message">No valid STL items found in the response</p>`;
+                    container.innerHTML = '<p class="error-message">No STL files found or invalid items data</p>';
+                    console.error('Items missing or not an array:', data.items);
                     return;
                 }
                 
-                data.items.forEach(item => {
-                    if (!item || !item.id) {
-                        console.warn('Invalid item:', item);
+                container.innerHTML = `<h2>Checklist: ${data.folder_name || 'Unknown'}</h2>`;
+                
+                data.items.forEach((item, index) => {
+                    if (!item || !item.id || !item.filename || !item.path) {
+                        console.warn(`Invalid item at index ${index}:`, item);
                         return;
                     }
                     const itemHtml = `
@@ -243,11 +250,11 @@ with open('templates/index.html', 'w') as f:
                     container.innerHTML += itemHtml;
                 });
                 
-                container.innerHTML += `<p>Total STL files found: ${data.file_count}</p>`;
+                container.innerHTML += `<p>Total STL files found: ${data.file_count || 0}</p>`;
                 document.getElementById('print-btn').style.display = 'inline-block';
             })
             .catch(error => {
-                console.error('Error:', error);
+                console.error('Fetch error:', error);
                 const container = document.getElementById('checklist-container');
                 container.innerHTML = `<p class="error-message">An error occurred: ${error.message}</p>`;
             });
