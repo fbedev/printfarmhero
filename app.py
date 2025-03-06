@@ -59,7 +59,6 @@ def generate_stl_preview(stl_path):
     except Exception as e:
         logger.error(f"Preview generation failed for {stl_path}: {str(e)}")
         return None
-
 def generate_checklist_data(folder_path):
     if not os.path.exists(folder_path):
         logger.error(f"Folder does not exist: {folder_path}")
@@ -68,7 +67,7 @@ def generate_checklist_data(folder_path):
     folder_name = os.path.basename(os.path.abspath(folder_path))
     checklist_items = []
     file_count = 0
-    
+
     logger.info(f"Scanning folder: {folder_path}")
     for root, dirs, files in os.walk(folder_path):
         logger.info(f"Checking directory: {root}")
@@ -77,23 +76,23 @@ def generate_checklist_data(folder_path):
                 file_count += 1
                 stl_path = os.path.join(root, file)
                 relative_path = os.path.relpath(stl_path, folder_path)
-                preview_base64 = generate_stl_preview(stl_path)
+                preview_base64 = generate_stl_preview(stl_path) or ""  # Ensure preview is always a string
                 item_id = relative_path.replace(os.sep, '_').replace('.', '_')
-                
+
                 checklist_items.append({
                     "id": item_id,
                     "filename": file,
                     "path": relative_path,
-                    "preview": preview_base64 if preview_base64 else ""
+                    "preview": preview_base64
                 })
                 logger.info(f"Added STL file: {stl_path} with ID: {item_id}")
-    
+
     response = {
         "folder_name": folder_name,
         "items": checklist_items,
         "file_count": file_count
     }
-    logger.info(f"Generated checklist data: folder_name={folder_name}, items_count={len(checklist_items)}, file_count={file_count}")
+    logger.info(f"Generated checklist data: {response}")  # Log full response
     return response
 
 @app.route('/')
