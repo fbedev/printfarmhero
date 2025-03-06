@@ -104,38 +104,38 @@ def index():
 def upload_folder():
     logger.info("Received upload request")
     if 'folder' not in request.files:
-        logger.error("No folder file part in request")
         return jsonify({"error": "No folder file part", "items": [], "file_count": 0}), 400
     
     file = request.files['folder']
     if file.filename == '':
-        logger.error("No selected file")
         return jsonify({"error": "No selected file", "items": [], "file_count": 0}), 400
     
     if file and file.filename.endswith('.zip'):
         try:
             zip_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
             file.save(zip_path)
-            logger.info(f"Saved zip file to: {zip_path}")
-            
             extract_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename[:-4])
+
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
-            logger.info(f"Extracted zip to: {extract_path}")
-            
+
             checklist_data = generate_checklist_data(extract_path)
-            
+
+            # Ensure a valid response is always returned
+            if not checklist_data:
+                checklist_data = {"error": "Failed to generate checklist", "items": [], "file_count": 0}
+
+            # Cleanup
             os.remove(zip_path)
             shutil.rmtree(extract_path, ignore_errors=True)
-            logger.info("Cleaned up temporary files")
             
             return jsonify(checklist_data)
+
         except Exception as e:
             logger.error(f"Error processing upload: {str(e)}")
-            return jsonify({"error": f"Error processing upload: {str(e)}", "items": [], "file_count": 0}), 500
-    else:
-        logger.error("Uploaded file is not a zip")
-        return jsonify({"error": "Please upload a .zip file", "items": [], "file_count": 0}), 400
+            return jsonify({"error": f"Server error: {str(e)}", "items": [], "file_count": 0}), 500
+    
+    return jsonify({"error": "Please upload a .zip file", "items": [], "file_count": 0}), 400
 
 # Updated HTML template
 with open('templates/index.html', 'w') as f:
