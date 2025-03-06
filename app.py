@@ -12,6 +12,9 @@ import shutil
 import logging
 
 app = Flask(__name__)
+import matplotlib
+matplotlib.use('Agg')  # Set the backend to Agg (non-GUI)
+import matplotlib.pyplot as plt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,22 +25,36 @@ UPLOAD_FOLDER = 'uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+import threading
 def generate_stl_preview(stl_path):
     try:
         logger.info(f"Generating preview for: {stl_path}")
         your_mesh = mesh.Mesh.from_file(stl_path)
+        
         fig = plt.figure(figsize=(5, 5))
         ax = fig.add_subplot(111, projection='3d')
+
         vectors = your_mesh.vectors
         collection = Poly3DCollection(vectors, facecolors='cyan', linewidths=0.1, edgecolors='black')
         ax.add_collection3d(collection)
-        scale = your_mesh.points.flatten()
-        ax.auto_scale_xyz(scale, scale, scale)
+
+        # Get bounding box
+        min_vals = np.min(your_mesh.points, axis=0)
+        max_vals = np.max(your_mesh.points, axis=0)
+
+        # Adjust scaling to prevent tiny dots
+        padding = 10  # Adjust padding if needed
+        ax.set_xlim([min_vals[0] - padding, max_vals[0] + padding])
+        ax.set_ylim([min_vals[1] - padding, max_vals[1] + padding])
+        ax.set_zlim([min_vals[2] - padding, max_vals[2] + padding])
+
         ax.set_axis_off()
+
         buf = BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0, dpi=100)
         buf.seek(0)
         plt.close(fig)
+        
         return base64.b64encode(buf.getvalue()).decode('utf-8')
     except Exception as e:
         logger.error(f"Preview generation failed for {stl_path}: {str(e)}")
@@ -71,9 +88,6 @@ def generate_checklist_data(folder_path):
                 })
                 logger.info(f"Added STL file: {stl_path} with ID: {item_id}")
     
-    if not checklist_items:
-        logger.warning("No STL files found in the uploaded folder")
-    
     response = {
         "folder_name": folder_name,
         "items": checklist_items,
@@ -100,21 +114,17 @@ def upload_folder():
     
     if file and file.filename.endswith('.zip'):
         try:
-            # Save the uploaded zip file
             zip_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
             file.save(zip_path)
             logger.info(f"Saved zip file to: {zip_path}")
             
-            # Extract the zip file
             extract_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename[:-4])
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
             logger.info(f"Extracted zip to: {extract_path}")
             
-            # Generate checklist from extracted folder
             checklist_data = generate_checklist_data(extract_path)
             
-            # Clean up
             os.remove(zip_path)
             shutil.rmtree(extract_path, ignore_errors=True)
             logger.info("Cleaned up temporary files")
@@ -127,7 +137,7 @@ def upload_folder():
         logger.error("Uploaded file is not a zip")
         return jsonify({"error": "Please upload a .zip file", "items": [], "file_count": 0}), 400
 
-# HTML template with enhanced diagnostics
+# Updated HTML template
 with open('templates/index.html', 'w') as f:
     f.write('''<!DOCTYPE html>
 <html>
@@ -166,6 +176,7 @@ with open('templates/index.html', 'w') as f:
         #folder-input { margin-right: 10px; }
         #checklist-container { margin-top: 20px; }
         .error-message { color: red; }
+        .status-message { color: #333; }
         @media print {
             .print-button, .input-container { display: none; }
         }
@@ -175,19 +186,28 @@ with open('templates/index.html', 'w') as f:
     <h1>3D Print Checklist Generator</h1>
     <div class="input-container">
         <input type="file" id="folder-input" name="folder" accept=".zip">
-        <button class="generate-button" onclick="uploadFolder()">Generate Checklist</button>
+        <button class="generate-button" id="generate-btn">Generate Checklist</button>
         <button class="print-button" onclick="window.print()" style="display: none;" id="print-btn">Print Checklist</button>
     </div>
-    <div id="checklist-container"></div>
+    <div id="checklist-container">
+        <p class="status-message">Please upload a .zip file containing your STL folder structure.</p>
+    </div>
 
     <script>
+        document.getElementById('generate-btn').addEventListener('click', uploadFolder);
+
         function uploadFolder() {
             const fileInput = document.getElementById('folder-input');
             const file = fileInput.files[0];
+            const container = document.getElementById('checklist-container');
+            
             if (!file) {
-                alert('Please select a zip file');
+                container.innerHTML = '<p class="error-message">Please select a .zip file to upload.</p>';
                 return;
             }
+            
+            container.innerHTML = '<p class="status-message">Uploading and processing your zip file...</p>';
+            document.getElementById('print-btn').style.display = 'none';
             
             const formData = new FormData();
             formData.append('folder', file);
@@ -204,7 +224,6 @@ with open('templates/index.html', 'w') as f:
             })
             .then(data => {
                 console.log('Server response:', data);
-                const container = document.getElementById('checklist-container');
                 container.innerHTML = '';
                 
                 if (!data || typeof data !== 'object') {
@@ -218,9 +237,8 @@ with open('templates/index.html', 'w') as f:
                     return;
                 }
                 
-                if (!data.items || !Array.isArray(data.items)) {
-                    container.innerHTML = '<p class="error-message">No STL files found or invalid items data</p>';
-                    console.error('Items missing or not an array:', data.items);
+                if (!data.items || !Array.isArray(data.items) || data.items.length === 0) {
+                    container.innerHTML = '<p class="error-message">No STL files found in the uploaded zip.</p>';
                     return;
                 }
                 
@@ -255,7 +273,6 @@ with open('templates/index.html', 'w') as f:
             })
             .catch(error => {
                 console.error('Fetch error:', error);
-                const container = document.getElementById('checklist-container');
                 container.innerHTML = `<p class="error-message">An error occurred: ${error.message}</p>`;
             });
         }
@@ -265,4 +282,4 @@ with open('templates/index.html', 'w') as f:
 ''')
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8000)))
