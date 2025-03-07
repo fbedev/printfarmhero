@@ -5,7 +5,7 @@ os.system("pip install numpy-stl")
 
 from pathlib import Path
 import base64
-from numpy_stl import mesh
+from stl import mesh
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
