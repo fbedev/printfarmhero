@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
 import base64
-from stl import mesh  # Requires 'numpy-stl' package
+from numpy_stl import mesh
+
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from io import BytesIO
