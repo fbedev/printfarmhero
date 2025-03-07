@@ -1,4 +1,8 @@
+
 import os
+os.system("pip install numpy-stl")
+
+
 from pathlib import Path
 import base64
 from numpy_stl import mesh
